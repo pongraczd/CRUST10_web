@@ -168,9 +168,10 @@ async function drawMap(grid) {
         `${layerSelection.options[layerSelection.selectedIndex].text} – ` +
         propertySelection.options[propertySelection.selectedIndex].text.toLowerCase();
 
+    let zoom_level = 1;
     const projection = d3
         .geoEqualEarth()
-        .scale(2 * width / (2 * Math.PI))
+        .scale(zoom_level * width / (2 * Math.PI))
         .translate([width / 2, height / 2])
         .clipExtent([[0, 0], [width, height]]);
 
@@ -187,13 +188,16 @@ async function drawMap(grid) {
 
     const container = outerContainer
         .append("div")
-        .style("position", "relative")
-        .style("display", "inline-block");
+        .style("display", "flex")
+        .style("align-items", "center")
+        .style("gap", "12px")
+        .style("width", "max-content");
 
     const canvas = container
         .append("canvas")
         .attr("width", width)
-        .attr("height", height);
+        .attr("height", height)
+        .style("flex", "0 0 auto");
 
     const context = canvas.node().getContext("2d");
     const path = d3.geoPath().projection(projection).context(context);
@@ -270,10 +274,7 @@ async function drawMap(grid) {
         .append("svg")
         .attr("width", barWidth + 70)
         .attr("height", barHeight + topMargin * 2)
-        .style("position", "absolute")
-        .style("right", "-28px")
-        .style("top", "50%")
-        .style("transform", "translateY(-50%)");
+        .style("flex", "0 0 auto");
 
     const barGroup = svg.append("g").attr("transform", `translate(0, ${topMargin})`);
     const svgGradient = barGroup
