@@ -244,29 +244,26 @@ function drawMapGraticuleLabels(context, projection, width, height, rightGutter,
         ) {
             continue;
         }
-        context.strokeText(label.text, label.position, height + 4);
-        context.fillText(label.text, label.position, height + 4);
+        context.strokeText(label.text, label.position, height + 2);
+        context.fillText(label.text, label.position, height + 2);
         occupiedUntil = label.position + halfWidth;
     }
 
     // Find the right-most visible point of each parallel in the current AOI.
     const rightLabels = [];
     for (let latitude = -80; latitude <= 80; latitude += 20) {
-        let edge = null;
-        for (let longitude = -180; longitude <= 180; longitude += 2) {
-            const point = projection([longitude, latitude]);
-            if (
-                point &&
-                point[0] >= 0 && point[0] <= width &&
-                point[1] >= 0 && point[1] <= height &&
-                (!edge || point[0] > edge[0])
-            ) {
-                edge = point;
+        const westernEdge = projection([-179.999, latitude]);
+        const easternEdge = projection([179.999, latitude]);
+        if (westernEdge && easternEdge) {
+            const mapLeft = Math.min(westernEdge[0], easternEdge[0]);
+            const mapRight = Math.max(westernEdge[0], easternEdge[0]);
+            const y = easternEdge[1];
+            if (mapRight < 0 || mapLeft > width || y < 0 || y > height) {
+                continue;
             }
-        }
-        if (edge) {
             rightLabels.push({
-                position: edge[1],
+                x: Math.min(width, mapRight),
+                y,
                 text: formatMapCoordinate(latitude, "N", "S")
             });
         }
@@ -275,17 +272,18 @@ function drawMapGraticuleLabels(context, projection, width, height, rightGutter,
     context.textAlign = "left";
     context.textBaseline = "middle";
     occupiedUntil = -Infinity;
-    for (const label of rightLabels.sort((first, second) => first.position - second.position)) {
+    for (const label of rightLabels.sort((first, second) => first.y - second.y)) {
         if (
-            label.position < 8 ||
-            label.position > height - 8 ||
-            label.position < occupiedUntil + 14
+            label.y < 8 ||
+            label.y > height - 8 ||
+            label.y < occupiedUntil + 14
         ) {
             continue;
         }
-        context.strokeText(label.text, width + 7, label.position);
-        context.fillText(label.text, width + 7, label.position);
-        occupiedUntil = label.position;
+        const labelX = label.x > width - 3 ? width + 4 : label.x + 4;
+        context.strokeText(label.text, labelX, label.y);
+        context.fillText(label.text, labelX, label.y);
+        occupiedUntil = label.y;
     }
     context.restore();
 }
@@ -378,8 +376,8 @@ async function drawMap(grid, extentOptions) {
     output.selectAll("*").remove();
     const colorbarWidth = 98;
     const mapColorbarGap = 40;
-    const mapLabelRightGutter = 48;
-    const mapLabelBottomGutter = 24;
+    const mapLabelRightGutter = 42;
+    const mapLabelBottomGutter = 20;
     const maximumMapWidth = 1200;
     const reservedWidth = colorbarWidth + mapColorbarGap + mapLabelRightGutter;
     const availableWidth = output.node().clientWidth || maximumMapWidth + reservedWidth;
@@ -426,7 +424,11 @@ async function drawMap(grid, extentOptions) {
         .style("position", "relative")
         .style("flex", "0 0 auto")
         .style("width", `${width + mapLabelRightGutter}px`)
-        .style("height", `${height + mapLabelBottomGutter}px`);
+        .style("height", `${height + mapLabelBottomGutter}px`)
+        .style("overflow", "hidden")
+        .style("background", "#ffffff")
+        .style("border-radius", "8px")
+        .style("box-shadow", "inset 0 0 0 1px #e1e4e9");
 
     const canvas = mapStage
         .append("canvas")
