@@ -54,16 +54,18 @@ function drawMap(array) {
     let prop_text = prop_selection.options[prop_selection.selectedIndex].text.toLowerCase();
     let title_text = `${layer_text} - ${prop_text}`;
 
-    const bboxGeoJSON = {
-    type: "Polygon",
-    coordinates: [[
-        [0, 30], [60, 30], [60, 60], [0, 60], [0, 30]
-    ]]
-    };
+    //const bboxGeoJSON = {
+    //type: "Polygon",
+    //coordinates: [[
+    //    [0, 30], [60, 30], [60, 60], [0, 60], [0, 30]
+    //]]
+    //};
 
     // projection = d3.geoMercator().fitExtent([[0, 0], [width, height]], bboxGeoJSON);
+    const zoom = 2; // hard-coded 2x zoom for now
+
     const projection = d3.geoEqualEarth()
-    .scale(width / (2 * Math.PI))
+    .scale(zoom * width / (2 * Math.PI))
     .translate([width / 2, height / 2])
     .clipExtent([[0, 0], [width, height]]);
     if (d3.select("#map-container")) {
