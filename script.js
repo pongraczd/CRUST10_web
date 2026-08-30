@@ -193,6 +193,48 @@ function getLandData() {
     return landDataPromise;
 }
 
+function formatMapCoordinate(value, positiveSuffix, negativeSuffix) {
+    if (value === 0) {
+        return "0°";
+    }
+    return `${Math.abs(value)}°${value > 0 ? positiveSuffix : negativeSuffix}`;
+}
+
+function drawMapGraticuleLabels(context, projection, width, height) {
+    context.save();
+    context.font = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    context.lineWidth = 3;
+    context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+    context.fillStyle = "rgba(43, 51, 59, 0.96)";
+
+    // Label meridians just inside the projected southern edge of the globe.
+    context.textAlign = "center";
+    context.textBaseline = "bottom";
+    for (let longitude = -160; longitude <= 160; longitude += 20) {
+        const edge = projection([longitude, -89.999]);
+        if (!edge || edge[0] < 24 || edge[0] > width - 24 || edge[1] < 16 || edge[1] > height) {
+            continue;
+        }
+        const label = formatMapCoordinate(longitude, "E", "W");
+        context.strokeText(label, edge[0], edge[1] - 4);
+        context.fillText(label, edge[0], edge[1] - 4);
+    }
+
+    // Label parallels at the actual eastern outline, not the canvas boundary.
+    context.textAlign = "right";
+    context.textBaseline = "middle";
+    for (let latitude = -80; latitude <= 80; latitude += 20) {
+        const edge = projection([179.999, latitude]);
+        if (!edge || edge[0] < 32 || edge[0] > width || edge[1] < 12 || edge[1] > height - 12) {
+            continue;
+        }
+        const label = formatMapCoordinate(latitude, "N", "S");
+        context.strokeText(label, edge[0] - 6, edge[1]);
+        context.fillText(label, edge[0] - 6, edge[1]);
+    }
+    context.restore();
+}
+
 function enableMapZoom(canvas, context, land, projection, width, height) {
     const sourceCanvas = document.createElement("canvas");
     sourceCanvas.width = width;
@@ -229,6 +271,7 @@ function enableMapZoom(canvas, context, land, projection, width, height) {
         path(land);
         path(graticule);
         context.stroke();
+        drawMapGraticuleLabels(context, projection, width, height);
         context.restore();
     }
 
@@ -259,11 +302,18 @@ function enableMapZoom(canvas, context, land, projection, width, height) {
 }
 
 async function drawMap(grid, extentOptions) {
-    const width = 1200;
-    const height = 600;
-    const [minimum, maximum] = gridExtent(grid, extentOptions);
     const output = d3.select("#map-output");
     output.selectAll("*").remove();
+    const colorbarWidth = 98;
+    const mapColorbarGap = 40;
+    const maximumMapWidth = 1200;
+    const availableWidth = output.node().clientWidth || maximumMapWidth + colorbarWidth + mapColorbarGap;
+    const width = Math.max(
+        1,
+        Math.min(maximumMapWidth, Math.floor(availableWidth - colorbarWidth - mapColorbarGap))
+    );
+    const height = Math.max(1, Math.round(width / 2));
+    const [minimum, maximum] = gridExtent(grid, extentOptions);
 
     const layerSelection = document.getElementById("layer");
     const propertySelection = document.getElementById("property");
@@ -293,7 +343,7 @@ async function drawMap(grid, extentOptions) {
         .append("div")
         .style("display", "flex")
         .style("align-items", "center")
-        .style("gap", "12px")
+        .style("gap", `${mapColorbarGap}px`)
         .style("width", "max-content");
 
     const canvas = container
@@ -370,7 +420,7 @@ async function drawMap(grid, extentOptions) {
     const topMargin = 15;
     const svg = container
         .append("svg")
-        .attr("width", barWidth + 70)
+        .attr("width", colorbarWidth)
         .attr("height", barHeight + topMargin * 2)
         .style("flex", "0 0 auto");
 
