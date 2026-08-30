@@ -121,7 +121,7 @@ async function loadMap() {
     try {
         const grid = await loadGrid(getLayerName());
         await drawMap(grid);
-        setStatus(status, "Map ready.");
+        setStatus(status, "Map ready. Scroll to zoom and drag to pan.");
     } catch (error) {
         console.error(error);
         setStatus(status, error.message || "The map could not be displayed.", true);
@@ -153,6 +153,46 @@ function getLandData() {
             });
     }
     return landDataPromise;
+}
+
+function enableMapZoom(canvas, context, width, height) {
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = width;
+    sourceCanvas.height = height;
+    sourceCanvas.getContext("2d").drawImage(canvas.node(), 0, 0);
+
+    function redraw(transform) {
+        context.save();
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.clearRect(0, 0, width, height);
+        context.setTransform(transform.k, 0, 0, transform.k, transform.x, transform.y);
+        context.imageSmoothingEnabled = true;
+        context.drawImage(sourceCanvas, 0, 0);
+        context.restore();
+    }
+
+    const zoom = d3
+        .zoom()
+        .scaleExtent([1, 8])
+        .extent([[0, 0], [width, height]])
+        .translateExtent([[0, 0], [width, height]])
+        .on("start", function () {
+            canvas.style("cursor", "grabbing");
+        })
+        .on("zoom", function () {
+            redraw(d3.event.transform);
+        })
+        .on("end", function () {
+            canvas.style("cursor", "grab");
+        });
+
+    canvas
+        .attr("tabindex", 0)
+        .attr("role", "img")
+        .attr("aria-label", "Interactive global layer map. Scroll to zoom and drag to pan.")
+        .style("cursor", "grab")
+        .style("touch-action", "none")
+        .call(zoom);
 }
 
 async function drawMap(grid) {
@@ -266,6 +306,8 @@ async function drawMap(grid) {
     path(land);
     path(d3.geoGraticule().stepMinor([20, 20]).stepMajor([20, 20])());
     context.stroke();
+
+    enableMapZoom(canvas, context, width, height);
 
     const barHeight = height * 0.75;
     const barWidth = 28;
