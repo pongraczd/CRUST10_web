@@ -112,6 +112,21 @@ function getLayerName() {
     return `${property}${layerNumber}`;
 }
 
+function updateMapExtentControls() {
+    const clip = document.getElementById("map-extent-clip").checked;
+    document.getElementById("map-extent-n").disabled = !clip;
+}
+
+function getMapExtentOptions() {
+    const clip = document.getElementById("map-extent-clip").checked;
+    const n = Number(document.getElementById("map-extent-n").value);
+
+    if (clip && (!Number.isFinite(n) || n <= 0)) {
+        throw new RangeError("Standard deviations (n) must be a number greater than zero.");
+    }
+    return {clip, n};
+}
+
 async function loadMap() {
     const button = document.getElementById("ok");
     const status = document.getElementById("map-status");
@@ -119,26 +134,49 @@ async function loadMap() {
     setStatus(status, "Loading map grid…");
 
     try {
+        const extentOptions = getMapExtentOptions();
         const grid = await loadGrid(getLayerName());
-        await drawMap(grid);
-        setStatus(status, "Map ready. Scroll to zoom and drag to pan.");
+        await drawMap(grid, extentOptions);
+        const extentDescription = extentOptions.clip
+            ? `Color range clipped at mean ± ${extentOptions.n}σ.`
+            : "Color range uses the full minimum–maximum extent.";
+        setStatus(
+            status,
+            `Map ready. ${extentDescription} Scroll to zoom and drag to pan.`
+        );
     } catch (error) {
-        console.error(error);
+        if (!(error instanceof RangeError)) {
+            console.error(error);
+        }
         setStatus(status, error.message || "The map could not be displayed.", true);
     } finally {
         button.disabled = false;
     }
 }
 
-function gridExtent(grid) {
-    let minimum = Infinity;
-    let maximum = -Infinity;
+function gridExtent(grid, { clip = true, n = 3 } = {}) {
+    // collect values
+    const values = [];
     for (const row of grid) {
         for (const value of row) {
-            minimum = Math.min(minimum, value);
-            maximum = Math.max(maximum, value);
+            if (Number.isFinite(value)) values.push(value);
         }
     }
+    if (values.length === 0) return [Infinity, -Infinity];
+    // compute basic min/max
+    let minimum = math.min(values);
+    let maximum = math.max(values);
+
+    if (clip) {
+        // compute mean and standard deviation
+        const mean = math.mean(values);
+        const sdev = math.std(values);
+        const clipMin = mean - n * sdev;
+        const clipMax = mean + n * sdev;
+        minimum = Math.max(minimum, clipMin);
+        maximum = Math.min(maximum, clipMax);
+    }
+
     return [minimum, maximum];
 }
 
@@ -155,19 +193,42 @@ function getLandData() {
     return landDataPromise;
 }
 
-function enableMapZoom(canvas, context, width, height) {
+function enableMapZoom(canvas, context, land, projection, width, height) {
     const sourceCanvas = document.createElement("canvas");
     sourceCanvas.width = width;
     sourceCanvas.height = height;
     sourceCanvas.getContext("2d").drawImage(canvas.node(), 0, 0);
 
+    const initialScale = projection.scale();
+    const initialTranslate = projection.translate();
+    const path = d3.geoPath().projection(projection).context(context);
+    const graticule = d3.geoGraticule().stepMinor([20, 20]).stepMajor([20, 20])();
+
     function redraw(transform) {
         context.save();
         context.setTransform(1, 0, 0, 1, 0, 0);
         context.clearRect(0, 0, width, height);
+
+        // The raster can be transformed cheaply, while geographic vectors are
+        // projected again below so they stay sharp at every zoom level.
         context.setTransform(transform.k, 0, 0, transform.k, transform.x, transform.y);
         context.imageSmoothingEnabled = true;
         context.drawImage(sourceCanvas, 0, 0);
+
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        projection
+            .scale(initialScale * transform.k)
+            .translate([
+                initialTranslate[0] * transform.k + transform.x,
+                initialTranslate[1] * transform.k + transform.y
+            ]);
+
+        context.beginPath();
+        context.strokeStyle = "#707780";
+        context.lineWidth = 0.7;
+        path(land);
+        path(graticule);
+        context.stroke();
         context.restore();
     }
 
@@ -193,12 +254,14 @@ function enableMapZoom(canvas, context, width, height) {
         .style("cursor", "grab")
         .style("touch-action", "none")
         .call(zoom);
+
+    redraw(d3.zoomIdentity);
 }
 
-async function drawMap(grid) {
+async function drawMap(grid, extentOptions) {
     const width = 1200;
     const height = 600;
-    const [minimum, maximum] = gridExtent(grid);
+    const [minimum, maximum] = gridExtent(grid, extentOptions);
     const output = d3.select("#map-output");
     output.selectAll("*").remove();
 
@@ -254,8 +317,8 @@ async function drawMap(grid) {
     colorCanvas.height = 1;
     const colorContext = colorCanvas.getContext("2d");
     const gradient = colorContext.createLinearGradient(0, 0, scaleWidth, 0);
-    const colors = ["#000083", "#003caa", "#05ffff", "#ffff00", "#fa0000", "#800000"];
-    const positions = [0, 0.125, 0.375, 0.625, 0.875, 1];
+    const colors = ["#000080", "#0000ff", "#0000ff", "#00dbff", "#00e6f7", "#15ffe2", "#efff08", "#f7f600", "#ffec00", "#ff1300", "#e80000", "#800000"];
+    const positions = [0, 0.11, 0.125, 0.34, 0.35, 0.375, 0.64, 0.65, 0.66, 0.89, 0.91, 1];
     colors.forEach((color, index) => gradient.addColorStop(positions[index], color));
     colorContext.fillStyle = gradient;
     colorContext.fillRect(0, 0, scaleWidth, 1);
@@ -300,14 +363,7 @@ async function drawMap(grid) {
     context.drawImage(rasterCanvas, 0, 0);
     context.restore();
 
-    context.beginPath();
-    context.strokeStyle = "#707780";
-    context.lineWidth = 0.7;
-    path(land);
-    path(d3.geoGraticule().stepMinor([20, 20]).stepMajor([20, 20])());
-    context.stroke();
-
-    enableMapZoom(canvas, context, width, height);
+    enableMapZoom(canvas, context, land, projection, width, height);
 
     const barHeight = height * 0.75;
     const barWidth = 28;
@@ -700,6 +756,7 @@ async function plotCrossSection() {
 }
 
 document.getElementById("ok").addEventListener("click", loadMap);
+document.getElementById("map-extent-clip").addEventListener("change", updateMapExtentControls);
 document.getElementById("cross-direction").addEventListener("change", updateCoordinateControl);
 document.getElementById("plot-cross-section").addEventListener("click", plotCrossSection);
 document.getElementById("cross-coordinate").addEventListener("keydown", event => {
@@ -707,4 +764,5 @@ document.getElementById("cross-coordinate").addEventListener("keydown", event =>
         plotCrossSection();
     }
 });
+updateMapExtentControls();
 updateCoordinateControl();
