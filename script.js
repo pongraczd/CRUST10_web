@@ -200,42 +200,107 @@ function formatMapCoordinate(value, positiveSuffix, negativeSuffix) {
     return `${Math.abs(value)}°${value > 0 ? positiveSuffix : negativeSuffix}`;
 }
 
-function drawMapGraticuleLabels(context, projection, width, height) {
+function drawMapGraticuleLabels(context, projection, width, height, rightGutter, bottomGutter) {
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, width + rightGutter, height + bottomGutter);
     context.save();
     context.font = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     context.lineWidth = 3;
     context.strokeStyle = "rgba(255, 255, 255, 0.92)";
     context.fillStyle = "rgba(43, 51, 59, 0.96)";
 
-    // Label meridians just inside the projected southern edge of the globe.
-    context.textAlign = "center";
-    context.textBaseline = "bottom";
+    // Find the bottom-most visible point of each meridian in the current AOI.
+    const bottomLabels = [];
     for (let longitude = -160; longitude <= 160; longitude += 20) {
-        const edge = projection([longitude, -89.999]);
-        if (!edge || edge[0] < 24 || edge[0] > width - 24 || edge[1] < 16 || edge[1] > height) {
-            continue;
+        let edge = null;
+        for (let latitude = -90; latitude <= 90; latitude += 2) {
+            const point = projection([longitude, latitude]);
+            if (
+                point &&
+                point[0] >= 0 && point[0] <= width &&
+                point[1] >= 0 && point[1] <= height &&
+                (!edge || point[1] > edge[1])
+            ) {
+                edge = point;
+            }
         }
-        const label = formatMapCoordinate(longitude, "E", "W");
-        context.strokeText(label, edge[0], edge[1] - 4);
-        context.fillText(label, edge[0], edge[1] - 4);
+        if (edge) {
+            bottomLabels.push({
+                position: edge[0],
+                text: formatMapCoordinate(longitude, "E", "W")
+            });
+        }
     }
 
-    // Label parallels at the actual eastern outline, not the canvas boundary.
-    context.textAlign = "right";
-    context.textBaseline = "middle";
-    for (let latitude = -80; latitude <= 80; latitude += 20) {
-        const edge = projection([179.999, latitude]);
-        if (!edge || edge[0] < 32 || edge[0] > width || edge[1] < 12 || edge[1] > height - 12) {
+    context.textAlign = "center";
+    context.textBaseline = "top";
+    let occupiedUntil = -Infinity;
+    for (const label of bottomLabels.sort((first, second) => first.position - second.position)) {
+        const halfWidth = context.measureText(label.text).width / 2;
+        if (
+            label.position - halfWidth < 2 ||
+            label.position + halfWidth > width - 2 ||
+            label.position - halfWidth < occupiedUntil + 4
+        ) {
             continue;
         }
-        const label = formatMapCoordinate(latitude, "N", "S");
-        context.strokeText(label, edge[0] - 6, edge[1]);
-        context.fillText(label, edge[0] - 6, edge[1]);
+        context.strokeText(label.text, label.position, height + 4);
+        context.fillText(label.text, label.position, height + 4);
+        occupiedUntil = label.position + halfWidth;
+    }
+
+    // Find the right-most visible point of each parallel in the current AOI.
+    const rightLabels = [];
+    for (let latitude = -80; latitude <= 80; latitude += 20) {
+        let edge = null;
+        for (let longitude = -180; longitude <= 180; longitude += 2) {
+            const point = projection([longitude, latitude]);
+            if (
+                point &&
+                point[0] >= 0 && point[0] <= width &&
+                point[1] >= 0 && point[1] <= height &&
+                (!edge || point[0] > edge[0])
+            ) {
+                edge = point;
+            }
+        }
+        if (edge) {
+            rightLabels.push({
+                position: edge[1],
+                text: formatMapCoordinate(latitude, "N", "S")
+            });
+        }
+    }
+
+    context.textAlign = "left";
+    context.textBaseline = "middle";
+    occupiedUntil = -Infinity;
+    for (const label of rightLabels.sort((first, second) => first.position - second.position)) {
+        if (
+            label.position < 8 ||
+            label.position > height - 8 ||
+            label.position < occupiedUntil + 14
+        ) {
+            continue;
+        }
+        context.strokeText(label.text, width + 7, label.position);
+        context.fillText(label.text, width + 7, label.position);
+        occupiedUntil = label.position;
     }
     context.restore();
 }
 
-function enableMapZoom(canvas, context, land, projection, width, height) {
+function enableMapZoom(
+    canvas,
+    context,
+    labelContext,
+    land,
+    projection,
+    width,
+    height,
+    rightGutter,
+    bottomGutter
+) {
     const sourceCanvas = document.createElement("canvas");
     sourceCanvas.width = width;
     sourceCanvas.height = height;
@@ -271,8 +336,15 @@ function enableMapZoom(canvas, context, land, projection, width, height) {
         path(land);
         path(graticule);
         context.stroke();
-        drawMapGraticuleLabels(context, projection, width, height);
         context.restore();
+        drawMapGraticuleLabels(
+            labelContext,
+            projection,
+            width,
+            height,
+            rightGutter,
+            bottomGutter
+        );
     }
 
     const zoom = d3
@@ -306,11 +378,14 @@ async function drawMap(grid, extentOptions) {
     output.selectAll("*").remove();
     const colorbarWidth = 98;
     const mapColorbarGap = 40;
+    const mapLabelRightGutter = 48;
+    const mapLabelBottomGutter = 24;
     const maximumMapWidth = 1200;
-    const availableWidth = output.node().clientWidth || maximumMapWidth + colorbarWidth + mapColorbarGap;
+    const reservedWidth = colorbarWidth + mapColorbarGap + mapLabelRightGutter;
+    const availableWidth = output.node().clientWidth || maximumMapWidth + reservedWidth;
     const width = Math.max(
         1,
-        Math.min(maximumMapWidth, Math.floor(availableWidth - colorbarWidth - mapColorbarGap))
+        Math.min(maximumMapWidth, Math.floor(availableWidth - reservedWidth))
     );
     const height = Math.max(1, Math.round(width / 2));
     const [minimum, maximum] = gridExtent(grid, extentOptions);
@@ -346,13 +421,32 @@ async function drawMap(grid, extentOptions) {
         .style("gap", `${mapColorbarGap}px`)
         .style("width", "max-content");
 
-    const canvas = container
+    const mapStage = container
+        .append("div")
+        .style("position", "relative")
+        .style("flex", "0 0 auto")
+        .style("width", `${width + mapLabelRightGutter}px`)
+        .style("height", `${height + mapLabelBottomGutter}px`);
+
+    const canvas = mapStage
         .append("canvas")
         .attr("width", width)
         .attr("height", height)
-        .style("flex", "0 0 auto");
+        .style("position", "absolute")
+        .style("left", "0")
+        .style("top", "0");
+
+    const labelCanvas = mapStage
+        .append("canvas")
+        .attr("width", width + mapLabelRightGutter)
+        .attr("height", height + mapLabelBottomGutter)
+        .style("position", "absolute")
+        .style("left", "0")
+        .style("top", "0")
+        .style("pointer-events", "none");
 
     const context = canvas.node().getContext("2d");
+    const labelContext = labelCanvas.node().getContext("2d");
     const path = d3.geoPath().projection(projection).context(context);
     const land = await getLandData();
 
@@ -413,7 +507,17 @@ async function drawMap(grid, extentOptions) {
     context.drawImage(rasterCanvas, 0, 0);
     context.restore();
 
-    enableMapZoom(canvas, context, land, projection, width, height);
+    enableMapZoom(
+        canvas,
+        context,
+        labelContext,
+        land,
+        projection,
+        width,
+        height,
+        mapLabelRightGutter,
+        mapLabelBottomGutter
+    );
 
     const barHeight = height * 0.75;
     const barWidth = 28;
