@@ -125,6 +125,11 @@
             box-shadow: 0 0 0 3px var(--focus);
         }
 
+        .checkbox-label:has(input:disabled) {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
         .checkbox-label input {
             width: 16px;
             height: 16px;
@@ -237,6 +242,21 @@
 
         #map-output {
             overflow-x: hidden;
+        }
+
+        .map-value-card {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 150px;
+            padding: 28px;
+            color: var(--ink);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            font-size: 22px;
+            font-weight: 600;
+            text-align: center;
         }
 
         #cross-section-plot {

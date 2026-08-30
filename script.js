@@ -113,8 +113,13 @@ function getLayerName() {
 }
 
 function updateMapExtentControls() {
-    const clip = document.getElementById("map-extent-clip").checked;
-    document.getElementById("map-extent-n").disabled = !clip;
+    const clipControl = document.getElementById("map-extent-clip");
+    const layerNumber = Number(document.getElementById("layer").value.slice(1));
+    const property = document.getElementById("property").value;
+    const uniformProperty = isUniformWaterOrIceProperty(layerNumber, property);
+
+    clipControl.disabled = uniformProperty;
+    document.getElementById("map-extent-n").disabled = uniformProperty || !clipControl.checked;
 }
 
 function getMapExtentOptions() {
@@ -127,6 +132,37 @@ function getMapExtentOptions() {
     return {clip, n};
 }
 
+function isUniformWaterOrIceProperty(layerNumber, property) {
+    return layerNumber <= 2 && ["ro", "vp", "vs"].includes(property);
+}
+
+function renderUniformMapValue(grid, layerNumber, property) {
+    const metadata = PROPERTY_METADATA[property];
+    let value;
+    for (const row of grid) {
+        value = row.find(Number.isFinite);
+        if (value !== undefined) {
+            break;
+        }
+    }
+    if (value === undefined) {
+        throw new Error("The selected property grid contains no numeric value.");
+    }
+
+    const layerName = LAYER_NAMES[layerNumber - 1];
+    const output = d3.select("#map-output");
+    output.selectAll("*").remove();
+    output
+        .append("div")
+        .attr("class", "map-value-card")
+        .attr("role", "figure")
+        .attr("aria-label", `${layerName} ${metadata.label.toLowerCase()}`)
+        .text(
+            `${layerName} ${metadata.label.toLowerCase()} is ` +
+            `${value.toFixed(2)} ${metadata.unit}.`
+        );
+}
+
 async function loadMap() {
     const button = document.getElementById("ok");
     const status = document.getElementById("map-status");
@@ -134,15 +170,31 @@ async function loadMap() {
     setStatus(status, "Loading map grid…");
 
     try {
-        const extentOptions = getMapExtentOptions();
+        const layerNumber = Number(document.getElementById("layer").value.slice(1));
+        const property = document.getElementById("property").value;
+        const showUniformValue = isUniformWaterOrIceProperty(layerNumber, property);
+        const ignoreZero = layerNumber > 2 && ["ro", "vp", "vs"].includes(property);
+        const extentOptions = showUniformValue
+            ? null
+            : {...getMapExtentOptions(), ignoreZero};
         const grid = await loadGrid(getLayerName());
+
+        if (showUniformValue) {
+            renderUniformMapValue(grid, layerNumber, property);
+            setStatus(status, "This property is spatially constant, so no map is displayed.");
+            return;
+        }
+
         await drawMap(grid, extentOptions);
         const extentDescription = extentOptions.clip
             ? `Color range clipped at mean ± ${extentOptions.n}σ.`
             : "Color range uses the full minimum–maximum extent.";
+        const zeroDescription = extentOptions.ignoreZero
+            ? " Zero values are shown in white and excluded from the colorbar."
+            : "";
         setStatus(
             status,
-            `Map ready. ${extentDescription} Scroll to zoom and drag to pan.`
+            `Map ready. ${extentDescription}${zeroDescription} Scroll to zoom and drag to pan.`
         );
     } catch (error) {
         if (!(error instanceof RangeError)) {
@@ -154,15 +206,19 @@ async function loadMap() {
     }
 }
 
-function gridExtent(grid, { clip = true, n = 3 } = {}) {
+function gridExtent(grid, { clip = true, n = 3, ignoreZero = false } = {}) {
     // collect values
     const values = [];
     for (const row of grid) {
         for (const value of row) {
-            if (Number.isFinite(value)) values.push(value);
+            if (Number.isFinite(value) && (!ignoreZero || value !== 0)) {
+                values.push(value);
+            }
         }
     }
-    if (values.length === 0) return [Infinity, -Infinity];
+    if (values.length === 0) {
+        throw new Error("The selected grid contains no nonzero values to display.");
+    }
     // compute basic min/max
     let minimum = math.min(values);
     let maximum = math.max(values);
@@ -200,7 +256,15 @@ function formatMapCoordinate(value, positiveSuffix, negativeSuffix) {
     return `${Math.abs(value)}°${value > 0 ? positiveSuffix : negativeSuffix}`;
 }
 
-function drawMapGraticuleLabels(context, projection, width, height, rightGutter, bottomGutter) {
+function drawMapGraticuleLabels(
+    context,
+    projection,
+    width,
+    height,
+    rightGutter,
+    bottomGutter,
+    zoomScale
+) {
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, width + rightGutter, height + bottomGutter);
     context.save();
@@ -208,10 +272,11 @@ function drawMapGraticuleLabels(context, projection, width, height, rightGutter,
     context.lineWidth = 3;
     context.strokeStyle = "rgba(255, 255, 255, 0.92)";
     context.fillStyle = "rgba(43, 51, 59, 0.96)";
+    const labelInterval = zoomScale >= 2 ? 20 : 40;
 
     // Find the bottom-most visible point of each meridian in the current AOI.
     const bottomLabels = [];
-    for (let longitude = -160; longitude <= 160; longitude += 20) {
+    for (let longitude = -160; longitude <= 160; longitude += labelInterval) {
         let edge = null;
         for (let latitude = -90; latitude <= 90; latitude += 2) {
             const point = projection([longitude, latitude]);
@@ -226,7 +291,8 @@ function drawMapGraticuleLabels(context, projection, width, height, rightGutter,
         }
         if (edge) {
             bottomLabels.push({
-                position: edge[0],
+                x: edge[0],
+                y: edge[1],
                 text: formatMapCoordinate(longitude, "E", "W")
             });
         }
@@ -235,23 +301,24 @@ function drawMapGraticuleLabels(context, projection, width, height, rightGutter,
     context.textAlign = "center";
     context.textBaseline = "top";
     let occupiedUntil = -Infinity;
-    for (const label of bottomLabels.sort((first, second) => first.position - second.position)) {
+    for (const label of bottomLabels.sort((first, second) => first.x - second.x)) {
         const halfWidth = context.measureText(label.text).width / 2;
         if (
-            label.position - halfWidth < 2 ||
-            label.position + halfWidth > width - 2 ||
-            label.position - halfWidth < occupiedUntil + 4
+            label.x - halfWidth < 2 ||
+            label.x + halfWidth > width - 2 ||
+            label.x - halfWidth < occupiedUntil + 4
         ) {
             continue;
         }
-        context.strokeText(label.text, label.position, height + 2);
-        context.fillText(label.text, label.position, height + 2);
-        occupiedUntil = label.position + halfWidth;
+        const labelY = Math.min(height + 10, label.y + 10);
+        context.strokeText(label.text, label.x, labelY);
+        context.fillText(label.text, label.x, labelY);
+        occupiedUntil = label.x + halfWidth;
     }
 
     // Find the right-most visible point of each parallel in the current AOI.
     const rightLabels = [];
-    for (let latitude = -80; latitude <= 80; latitude += 20) {
+    for (let latitude = -80; latitude <= 80; latitude += labelInterval) {
         const westernEdge = projection([-179.999, latitude]);
         const easternEdge = projection([179.999, latitude]);
         if (westernEdge && easternEdge) {
@@ -280,7 +347,7 @@ function drawMapGraticuleLabels(context, projection, width, height, rightGutter,
         ) {
             continue;
         }
-        const labelX = label.x > width - 3 ? width + 4 : label.x + 4;
+        const labelX = label.x > width - 3 ? width + 10 : label.x + 10;
         context.strokeText(label.text, labelX, label.y);
         context.fillText(label.text, labelX, label.y);
         occupiedUntil = label.y;
@@ -341,7 +408,8 @@ function enableMapZoom(
             width,
             height,
             rightGutter,
-            bottomGutter
+            bottomGutter,
+            transform.k
         );
     }
 
@@ -376,8 +444,8 @@ async function drawMap(grid, extentOptions) {
     output.selectAll("*").remove();
     const colorbarWidth = 98;
     const mapColorbarGap = 40;
-    const mapLabelRightGutter = 42;
-    const mapLabelBottomGutter = 20;
+    const mapLabelRightGutter = 50;
+    const mapLabelBottomGutter = 28;
     const maximumMapWidth = 1200;
     const reservedWidth = colorbarWidth + mapColorbarGap + mapLabelRightGutter;
     const availableWidth = output.node().clientWidth || maximumMapWidth + reservedWidth;
@@ -492,12 +560,19 @@ async function drawMap(grid, extentOptions) {
             }
 
             const value = grid[row][column];
+            const target = (pixelY * width + pixelX) * 4;
+            if (extentOptions.ignoreZero && value === 0) {
+                imageData[target] = 255;
+                imageData[target + 1] = 255;
+                imageData[target + 2] = 255;
+                imageData[target + 3] = 255;
+                continue;
+            }
             const normalized = valueRange === 0 ? 0.5 : (value - minimum) / valueRange;
             const colorIndex = Math.max(
                 0,
                 Math.min(scaleWidth - 1, Math.round(normalized * (scaleWidth - 1)))
             );
-            const target = (pixelY * width + pixelX) * 4;
             imageData[target] = colorData[colorIndex * 4];
             imageData[target + 1] = colorData[colorIndex * 4 + 1];
             imageData[target + 2] = colorData[colorIndex * 4 + 2];
@@ -913,6 +988,8 @@ async function plotCrossSection() {
 
 document.getElementById("ok").addEventListener("click", loadMap);
 document.getElementById("map-extent-clip").addEventListener("change", updateMapExtentControls);
+document.getElementById("layer").addEventListener("change", updateMapExtentControls);
+document.getElementById("property").addEventListener("change", updateMapExtentControls);
 document.getElementById("cross-direction").addEventListener("change", updateCoordinateControl);
 document.getElementById("plot-cross-section").addEventListener("click", plotCrossSection);
 document.getElementById("cross-coordinate").addEventListener("keydown", event => {
