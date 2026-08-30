@@ -592,6 +592,7 @@ async function plotCrossSection() {
         const axisTitle = direction === "parallel" ? "Longitude (°)" : "Latitude (°)";
         const coordinateLabel = formatSectionCoordinate(direction, coordinate);
         const layout = {
+            autosize: true,
             title: {
                 text: `CRUST 1.0 cross-section along ${coordinateLabel} ${directionLabel}`,
                 x: 0.5,
@@ -630,12 +631,14 @@ async function plotCrossSection() {
             uirevision: `${direction}-${property}-${coordinate}-${excludeSediments}`
         };
 
-        await Plotly.react("cross-section-plot", traces, layout, {
+        const plotElement = document.getElementById("cross-section-plot");
+        await Plotly.react(plotElement, traces, layout, {
             responsive: true,
             displaylogo: false,
             scrollZoom: true,
             modeBarButtonsToRemove: ["lasso2d", "select2d"]
         });
+        await Plotly.Plots.resize(plotElement);
 
         setStatus(
             status,
