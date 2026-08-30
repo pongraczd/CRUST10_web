@@ -406,6 +406,24 @@
                     </label>
                 </div>
 
+                <div class="field">
+                    <label for="clip-cross-range">Extent</label>
+                    <label class="checkbox-label" for="clip-cross-range">
+                        <input id="clip-cross-range" type="checkbox">
+                        <span>Clip lon/lat range</span>
+                    </label>
+                </div>
+
+                <div class="field">
+                    <label for="cross-range-min" id="cross-range-min-label">Minimum longitude (°)</label>
+                    <input id="cross-range-min" type="number" value="-179.5" min="-179.5" max="179.5" step="any" inputmode="decimal" disabled>
+                </div>
+
+                <div class="field">
+                    <label for="cross-range-max" id="cross-range-max-label">Maximum longitude (°)</label>
+                    <input id="cross-range-max" type="number" value="179.5" min="-179.5" max="179.5" step="any" inputmode="decimal" disabled>
+                </div>
+
                 <button id="plot-cross-section" type="button">Plot cross-section</button>
             </div>
             <p id="cross-section-status" class="status" role="status" aria-live="polite"></p>

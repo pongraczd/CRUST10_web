@@ -48,10 +48,12 @@ const PROPERTY_METADATA = {
 
 const SECTION_COLORSCALE = [
     [0.00, "#fffdf2"],
-    [0.22, "#ffe66b"],
-    [0.48, "#ff9f1c"],
-    [0.72, "#d62828"],
-    [1.00, "#240000"]
+    [0.16, "#fff3b0"],
+    [0.34, "#ffd166"],
+    [0.52, "#fca311"],
+    [0.70, "#f35b2c"],
+    [0.86, "#d62828"],
+    [1.00, "#8b2f2f"]
 ];
 
 const gridCache = new Map();
@@ -655,6 +657,60 @@ function updateCoordinateControl() {
     }
 }
 
+function updateCrossSectionRangeControls(resetValues = false) {
+    const direction = document.getElementById("cross-direction").value;
+    const clipRange = document.getElementById("clip-cross-range").checked;
+    const minimumInput = document.getElementById("cross-range-min");
+    const maximumInput = document.getElementById("cross-range-max");
+    const isParallel = direction === "parallel";
+    const limit = isParallel ? 179.5 : 89.5;
+    const coordinateName = isParallel ? "longitude" : "latitude";
+
+    document.getElementById("cross-range-min-label").textContent =
+        `Minimum ${coordinateName} (°)`;
+    document.getElementById("cross-range-max-label").textContent =
+        `Maximum ${coordinateName} (°)`;
+
+    for (const input of [minimumInput, maximumInput]) {
+        input.min = String(-limit);
+        input.max = String(limit);
+        input.disabled = !clipRange;
+    }
+    if (resetValues) {
+        minimumInput.value = String(-limit);
+        maximumInput.value = String(limit);
+    }
+}
+
+function getCrossSectionRange(direction) {
+    if (!document.getElementById("clip-cross-range").checked) {
+        return null;
+    }
+
+    const minimumRaw = document.getElementById("cross-range-min").value.trim();
+    const maximumRaw = document.getElementById("cross-range-max").value.trim();
+    const minimum = Number(minimumRaw);
+    const maximum = Number(maximumRaw);
+    const limit = direction === "parallel" ? 179.5 : 89.5;
+    const coordinateName = direction === "parallel" ? "Longitude" : "Latitude";
+
+    if (
+        minimumRaw === "" || maximumRaw === "" ||
+        !Number.isFinite(minimum) || !Number.isFinite(maximum)
+    ) {
+        throw new RangeError("Both horizontal range values must be valid numbers.");
+    }
+    if (minimum < -limit || maximum > limit) {
+        throw new RangeError(
+            `${coordinateName} range must stay between −${limit}° and ${limit}°.`
+        );
+    }
+    if (minimum >= maximum) {
+        throw new RangeError("Horizontal range minimum must be smaller than its maximum.");
+    }
+    return [minimum, maximum];
+}
+
 function validateCoordinate(direction, rawValue) {
     const coordinate = Number(rawValue);
     const limit = direction === "parallel" ? 89.5 : 179.5;
@@ -732,12 +788,34 @@ async function loadCrossSectionGrids(property) {
     return {boundaries, properties};
 }
 
+function makeCenteredStepSeries(x, values) {
+    if (x.length < 2) {
+        return {x: [...x], y: [...values]};
+    }
+
+    const stepX = [];
+    const stepY = [];
+    for (let index = 0; index < x.length; index += 1) {
+        const leftEdge = index === 0
+            ? x[index] - (x[index + 1] - x[index]) / 2
+            : (x[index - 1] + x[index]) / 2;
+        const rightEdge = index === x.length - 1
+            ? x[index] + (x[index] - x[index - 1]) / 2
+            : (x[index] + x[index + 1]) / 2;
+        stepX.push(leftEdge, rightEdge);
+        stepY.push(values[index], values[index]);
+    }
+    return {x: stepX, y: stepY};
+}
+
 function makeLayerFillTrace(x, upper, lower, name, color, propertyValue, metadata) {
+    const steppedUpper = makeCenteredStepSeries(x, upper);
+    const steppedLower = makeCenteredStepSeries(x, lower);
     return {
         type: "scatter",
         mode: "lines",
-        x: x.concat([...x].reverse()),
-        y: upper.concat([...lower].reverse()),
+        x: steppedUpper.x.concat([...steppedLower.x].reverse()),
+        y: steppedUpper.y.concat([...steppedLower.y].reverse()),
         fill: "toself",
         fillcolor: color,
         line: {color, width: 0.5},
@@ -839,6 +917,50 @@ function formatSectionCoordinate(direction, coordinate) {
     return `${magnitude}° ${suffix}`;
 }
 
+function crossSectionHorizontalGridStep(span) {
+    if (span >= 80) return 20;
+    if (span >= 40) return 10;
+    if (span >= 20) return 5;
+    if (span >= 10) return 2;
+    return 1;
+}
+
+function buildCrossSectionGridShapes(xRange, yRange) {
+    const shapes = [];
+    const xStep = crossSectionHorizontalGridStep(xRange[1] - xRange[0]);
+    const firstX = Math.ceil(xRange[0] / xStep) * xStep;
+    for (let value = firstX; value <= xRange[1]; value += xStep) {
+        shapes.push({
+            type: "line",
+            layer: "above",
+            xref: "x",
+            yref: "y",
+            x0: value,
+            x1: value,
+            y0: yRange[0],
+            y1: yRange[1],
+            line: {color: "#7f7f7f", width: 0.5, dash: "dot"}
+        });
+    }
+
+    const yStep = 5;
+    const firstY = Math.ceil(yRange[0] / yStep) * yStep;
+    for (let value = firstY; value <= yRange[1]; value += yStep) {
+        shapes.push({
+            type: "line",
+            layer: "above",
+            xref: "x",
+            yref: "y",
+            x0: xRange[0],
+            x1: xRange[1],
+            y0: value,
+            y1: value,
+            line: {color: "#7f7f7f", width: 0.5, dash: "dot"}
+        });
+    }
+    return shapes;
+}
+
 async function plotCrossSection() {
     const direction = document.getElementById("cross-direction").value;
     const property = document.getElementById("cross-property").value;
@@ -858,6 +980,7 @@ async function plotCrossSection() {
             direction,
             document.getElementById("cross-coordinate").value
         );
+        const horizontalRange = getCrossSectionRange(direction);
         const grids = await loadCrossSectionGrids(property);
         setStatus(status, "Interpolating layers and preparing the cross-section…");
 
@@ -910,7 +1033,8 @@ async function plotCrossSection() {
                 showlegend: false,
                 line: {
                     color: index === BOUNDARY_COUNT - 1 ? "#171b20" : "rgba(24, 29, 34, 0.78)",
-                    width: index === BOUNDARY_COUNT - 1 ? 1.6 : 0.8
+                    width: index === BOUNDARY_COUNT - 1 ? 1.6 : 0.8,
+                    shape: "hvh"
                 },
                 hovertemplate:
                     `<b>${BOUNDARY_NAMES[index]}</b><br>` +
@@ -921,6 +1045,8 @@ async function plotCrossSection() {
         const directionLabel = direction === "parallel" ? "parallel" : "meridian";
         const axisTitle = direction === "parallel" ? "Longitude (°)" : "Latitude (°)";
         const coordinateLabel = formatSectionCoordinate(direction, coordinate);
+        const plotXRange = horizontalRange || [x[0], x[x.length - 1]];
+        const plotYRange = [heatmap.mantleBottom, heatmap.surfaceMaximum];
         const layout = {
             autosize: true,
             title: {
@@ -944,21 +1070,21 @@ async function plotCrossSection() {
             },
             xaxis: {
                 title: {text: axisTitle},
-                range: [x[0], x[x.length - 1]],
-                showgrid: true,
-                gridcolor: "#dfe4e8",
+                range: plotXRange,
+                showgrid: false,
                 zerolinecolor: "#aab2b9",
                 ticksuffix: "°"
             },
             yaxis: {
                 title: {text: "Elevation / depth (km)"},
-                range: [heatmap.mantleBottom, heatmap.surfaceMaximum],
-                showgrid: true,
-                gridcolor: "#dfe4e8",
-                zeroline: true,
-                zerolinecolor: "#707b85"
+                range: plotYRange,
+                showgrid: false,
+                zeroline: false
             },
-            uirevision: `${direction}-${property}-${coordinate}-${excludeSediments}`
+            shapes: buildCrossSectionGridShapes(plotXRange, plotYRange),
+            uirevision:
+                `${direction}-${property}-${coordinate}-${excludeSediments}-` +
+                `${horizontalRange ? horizontalRange.join(":") : "full"}`
         };
 
         const plotElement = document.getElementById("cross-section-plot");
@@ -974,7 +1100,8 @@ async function plotCrossSection() {
             status,
             `Cross-section ready. Loaded 9 boundary grids and 9 ${metadata.label.toLowerCase()} grids; ` +
             `${excludeSediments ? "crystalline crust and mantle" : "rock"} color range ` +
-            `${heatmap.minimum.toFixed(2)}–${heatmap.maximum.toFixed(2)} ${metadata.unit}.`
+            `${heatmap.minimum.toFixed(2)}–${heatmap.maximum.toFixed(2)} ${metadata.unit}.` +
+            `${horizontalRange ? ` Displaying ${horizontalRange[0]}° to ${horizontalRange[1]}°.` : ""}`
         );
     } catch (error) {
         if (!(error instanceof RangeError)) {
@@ -990,7 +1117,14 @@ document.getElementById("ok").addEventListener("click", loadMap);
 document.getElementById("map-extent-clip").addEventListener("change", updateMapExtentControls);
 document.getElementById("layer").addEventListener("change", updateMapExtentControls);
 document.getElementById("property").addEventListener("change", updateMapExtentControls);
-document.getElementById("cross-direction").addEventListener("change", updateCoordinateControl);
+document.getElementById("cross-direction").addEventListener("change", () => {
+    updateCoordinateControl();
+    updateCrossSectionRangeControls(true);
+});
+document.getElementById("clip-cross-range").addEventListener(
+    "change",
+    () => updateCrossSectionRangeControls(false)
+);
 document.getElementById("plot-cross-section").addEventListener("click", plotCrossSection);
 document.getElementById("cross-coordinate").addEventListener("keydown", event => {
     if (event.key === "Enter") {
@@ -999,3 +1133,4 @@ document.getElementById("cross-coordinate").addEventListener("keydown", event =>
 });
 updateMapExtentControls();
 updateCoordinateControl();
+updateCrossSectionRangeControls(true);
