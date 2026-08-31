@@ -1,8 +1,15 @@
+/* ==========================================================================
+   Shared model configuration and utilities
+   ========================================================================== */
+
 const GRID_ROWS = 180;
 const GRID_COLUMNS = 360;
-const BOUNDARY_COUNT = 9;
-const MATERIAL_LAYER_COUNT = 9;
-const MANTLE_EXTENSION_KM = 5;
+
+// Airy-isostasy constants in SI units.
+const Re = 6371000; // Earth radius in m
+const rho_cr = 2670; // Density of crust in kg/m³
+const rho_m = 3300; // Density of mantle in kg/m³
+const D = 30000; // Fixed Airy compensation depth in m
 
 const LAYER_NAMES = [
     "Water",
@@ -14,18 +21,6 @@ const LAYER_NAMES = [
     "Middle crystalline crust",
     "Lower crystalline crust",
     "Upper mantle"
-];
-
-const BOUNDARY_NAMES = [
-    "Surface / topography",
-    "Water bottom",
-    "Ice bottom",
-    "Upper-sediment bottom",
-    "Middle-sediment bottom",
-    "Lower-sediment bottom",
-    "Upper-crust bottom",
-    "Middle-crust bottom",
-    "Moho"
 ];
 
 const PROPERTY_METADATA = {
@@ -46,24 +41,15 @@ const PROPERTY_METADATA = {
     }
 };
 
-const SECTION_COLORSCALE = [
-    [0.00, "#fffdf2"],
-    [0.16, "#fff3b0"],
-    [0.34, "#ffd166"],
-    [0.52, "#fca311"],
-    [0.70, "#f35b2c"],
-    [0.86, "#d62828"],
-    [1.00, "#8b2f2f"]
-];
-
 const gridCache = new Map();
-let landDataPromise;
 
+// Shared status messaging used by both viewers.
 function setStatus(element, message, isError = false) {
     element.textContent = message;
     element.classList.toggle("error", isError);
 }
 
+// Shared grid parsing, validation, fetching, and caching.
 function parseGrid(text, fileName) {
     const rows = text
         .split(/\r?\n/)
@@ -101,6 +87,33 @@ function loadGrid(gridName) {
     return gridCache.get(gridName);
 }
 
+// Exact spherical Airy solution for one value; all lengths are in metres.
+function Airy_iso_surf(h_eq, Re, D, rho_cr, rho_m) {
+    const delta_rho = rho_m - rho_cr;
+    const t = Re - D - Math.cbrt(
+        (Re - D) ** 3 -
+        rho_cr / delta_rho * ((Re + h_eq) ** 3 - Re ** 3)
+    );
+    const depth = -D;
+    const iso_surf = depth - t;
+    return iso_surf;
+}
+
+/* ==========================================================================
+   Layer map viewer
+   ========================================================================== */
+
+// Map-only configuration and state.
+const MAP_MAXIMUM_WIDTH = 1200;
+const MAP_COLORBAR_WIDTH = 98;
+const MAP_COLORBAR_GAP = 40;
+const MAP_LABEL_RIGHT_GUTTER = 50;
+const MAP_LABEL_BOTTOM_GUTTER = 28;
+const MAP_ZOOM_RANGE = [1, 8];
+const MAP_GRATICULE_STEP = 20;
+let landDataPromise;
+
+// Map selection and control state.
 function getLayerName() {
     let layerNumber = Number(document.getElementById("layer").value.slice(1));
     let property = document.getElementById("property").value;
@@ -165,6 +178,7 @@ function renderUniformMapValue(grid, layerNumber, property) {
         );
 }
 
+// Map loading and selection-specific display behavior.
 async function loadMap() {
     const button = document.getElementById("ok");
     const status = document.getElementById("map-status");
@@ -208,6 +222,7 @@ async function loadMap() {
     }
 }
 
+// Map color normalization and optional statistical clipping.
 function gridExtent(grid, { clip = true, n = 3, ignoreZero = false } = {}) {
     // collect values
     const values = [];
@@ -238,6 +253,7 @@ function gridExtent(grid, { clip = true, n = 3, ignoreZero = false } = {}) {
     return [minimum, maximum];
 }
 
+// Map geography, dynamic graticule labels, zooming, and panning.
 function getLandData() {
     if (!landDataPromise) {
         landDataPromise = d3
@@ -376,7 +392,10 @@ function enableMapZoom(
     const initialScale = projection.scale();
     const initialTranslate = projection.translate();
     const path = d3.geoPath().projection(projection).context(context);
-    const graticule = d3.geoGraticule().stepMinor([20, 20]).stepMajor([20, 20])();
+    const graticule = d3
+        .geoGraticule()
+        .stepMinor([MAP_GRATICULE_STEP, MAP_GRATICULE_STEP])
+        .stepMajor([MAP_GRATICULE_STEP, MAP_GRATICULE_STEP])();
 
     function redraw(transform) {
         context.save();
@@ -417,7 +436,7 @@ function enableMapZoom(
 
     const zoom = d3
         .zoom()
-        .scaleExtent([1, 8])
+        .scaleExtent(MAP_ZOOM_RANGE)
         .extent([[0, 0], [width, height]])
         .translateExtent([[0, 0], [width, height]])
         .on("start", function () {
@@ -441,19 +460,15 @@ function enableMapZoom(
     redraw(d3.zoomIdentity);
 }
 
+// Map raster and colorbar rendering.
 async function drawMap(grid, extentOptions) {
     const output = d3.select("#map-output");
     output.selectAll("*").remove();
-    const colorbarWidth = 98;
-    const mapColorbarGap = 40;
-    const mapLabelRightGutter = 50;
-    const mapLabelBottomGutter = 28;
-    const maximumMapWidth = 1200;
-    const reservedWidth = colorbarWidth + mapColorbarGap + mapLabelRightGutter;
-    const availableWidth = output.node().clientWidth || maximumMapWidth + reservedWidth;
+    const reservedWidth = MAP_COLORBAR_WIDTH + MAP_COLORBAR_GAP + MAP_LABEL_RIGHT_GUTTER;
+    const availableWidth = output.node().clientWidth || MAP_MAXIMUM_WIDTH + reservedWidth;
     const width = Math.max(
         1,
-        Math.min(maximumMapWidth, Math.floor(availableWidth - reservedWidth))
+        Math.min(MAP_MAXIMUM_WIDTH, Math.floor(availableWidth - reservedWidth))
     );
     const height = Math.max(1, Math.round(width / 2));
     const [minimum, maximum] = gridExtent(grid, extentOptions);
@@ -486,15 +501,15 @@ async function drawMap(grid, extentOptions) {
         .append("div")
         .style("display", "flex")
         .style("align-items", "center")
-        .style("gap", `${mapColorbarGap}px`)
+        .style("gap", `${MAP_COLORBAR_GAP}px`)
         .style("width", "max-content");
 
     const mapStage = container
         .append("div")
         .style("position", "relative")
         .style("flex", "0 0 auto")
-        .style("width", `${width + mapLabelRightGutter}px`)
-        .style("height", `${height + mapLabelBottomGutter}px`)
+        .style("width", `${width + MAP_LABEL_RIGHT_GUTTER}px`)
+        .style("height", `${height + MAP_LABEL_BOTTOM_GUTTER}px`)
         .style("overflow", "hidden")
         .style("background", "#ffffff")
         .style("border-radius", "8px")
@@ -510,8 +525,8 @@ async function drawMap(grid, extentOptions) {
 
     const labelCanvas = mapStage
         .append("canvas")
-        .attr("width", width + mapLabelRightGutter)
-        .attr("height", height + mapLabelBottomGutter)
+        .attr("width", width + MAP_LABEL_RIGHT_GUTTER)
+        .attr("height", height + MAP_LABEL_BOTTOM_GUTTER)
         .style("position", "absolute")
         .style("left", "0")
         .style("top", "0")
@@ -594,8 +609,8 @@ async function drawMap(grid, extentOptions) {
         projection,
         width,
         height,
-        mapLabelRightGutter,
-        mapLabelBottomGutter
+        MAP_LABEL_RIGHT_GUTTER,
+        MAP_LABEL_BOTTOM_GUTTER
     );
 
     const barHeight = height * 0.75;
@@ -603,7 +618,7 @@ async function drawMap(grid, extentOptions) {
     const topMargin = 15;
     const svg = container
         .append("svg")
-        .attr("width", colorbarWidth)
+        .attr("width", MAP_COLORBAR_WIDTH)
         .attr("height", barHeight + topMargin * 2)
         .style("flex", "0 0 auto");
 
@@ -641,6 +656,38 @@ async function drawMap(grid, extentOptions) {
         .style("font-size", "11px");
 }
 
+/* ==========================================================================
+   Cross-section viewer
+   ========================================================================== */
+
+// Cross-section-only configuration.
+const BOUNDARY_COUNT = 9;
+const MATERIAL_LAYER_COUNT = 9;
+const MANTLE_EXTENSION_KM = 5;
+
+const BOUNDARY_NAMES = [
+    "Surface / topography",
+    "Water bottom",
+    "Ice bottom",
+    "Upper-sediment bottom",
+    "Middle-sediment bottom",
+    "Lower-sediment bottom",
+    "Upper-crust bottom",
+    "Middle-crust bottom",
+    "Moho"
+];
+
+const SECTION_COLORSCALE = [
+    [0.00, "#fffdf2"],
+    [0.16, "#fff3b0"],
+    [0.34, "#ffd166"],
+    [0.52, "#fca311"],
+    [0.70, "#f35b2c"],
+    [0.86, "#d62828"],
+    [1.00, "#8b2f2f"]
+];
+
+// Cross-section control state and validation.
 function updateCoordinateControl() {
     const direction = document.getElementById("cross-direction").value;
     const input = document.getElementById("cross-coordinate");
@@ -721,6 +768,7 @@ function validateCoordinate(direction, rawValue) {
     return coordinate;
 }
 
+// Cross-section grid interpolation and axis construction.
 function interpolatePair(first, second, fraction, correctMissingValues) {
     if (correctMissingValues && (first === 0 || second === 0)) {
         return Math.max(first, second);
@@ -771,7 +819,7 @@ function sectionXAxis(direction) {
     return Array.from({length: count}, (_, index) => firstValue + index);
 }
 
-async function loadCrossSectionGrids(property) {
+async function loadCrossSectionGrids(property, includeAiryDensities = false) {
     const boundaryRequests = Array.from(
         {length: BOUNDARY_COUNT},
         (_, index) => loadGrid(`bd${index + 1}`)
@@ -780,14 +828,22 @@ async function loadCrossSectionGrids(property) {
         {length: MATERIAL_LAYER_COUNT},
         (_, index) => loadGrid(`${property}${index + 1}`)
     );
+    const separateAiryDensityRequest = includeAiryDensities && property !== "ro"
+        ? Promise.all([loadGrid("ro1"), loadGrid("ro2")])
+        : Promise.resolve(null);
 
-    const [boundaries, properties] = await Promise.all([
+    const [boundaries, properties, separateAiryDensities] = await Promise.all([
         Promise.all(boundaryRequests),
-        Promise.all(propertyRequests)
+        Promise.all(propertyRequests),
+        separateAiryDensityRequest
     ]);
-    return {boundaries, properties};
+    const airyDensities = includeAiryDensities
+        ? (separateAiryDensities || properties.slice(0, 2))
+        : null;
+    return {boundaries, properties, airyDensities};
 }
 
+// Cross-section stepped fills and boundary geometry.
 function makeCenteredStepSeries(x, values) {
     if (x.length < 2) {
         return {x: [...x], y: [...values]};
@@ -824,6 +880,7 @@ function makeLayerFillTrace(x, upper, lower, name, color, propertyValue, metadat
     };
 }
 
+// Cross-section property raster and color normalization.
 function buildSectionHeatmap(x, boundaries, properties, metadata, excludeSediments) {
     const surfaceMaximum = Math.max(...boundaries[0]);
     const mantleBottom = Math.min(...boundaries[BOUNDARY_COUNT - 1]) - MANTLE_EXTENSION_KM;
@@ -906,6 +963,50 @@ function buildSectionHeatmap(x, boundaries, properties, metadata, excludeSedimen
     };
 }
 
+/* ========================================================================
+   WATER + ICE ROCK-EQUIVALENT TOPOGRAPHY FOR THE AIRY MOHO
+
+   Only layer 1 (water) and layer 2 (ice) contribute to h_eq. The result is
+   the ice-bottom height (bd3) plus the partial spherical equivalent heights
+   of water and ice. Sediment and crustal layers are deliberately excluded.
+   ======================================================================== */
+function computeWaterIceEquivalentTopography(boundaries, densitySections) {
+    const waterTop = boundaries[0];
+    const waterBottom = boundaries[1];
+    const iceTop = boundaries[1];
+    const iceBottom = boundaries[2];
+    const waterDensity = densitySections[0];
+    const iceDensity = densitySections[1];
+
+    function partialEquivalentHeight(upperKm, lowerKm, densityGcm3) {
+        const rUpper = Re + upperKm * 1000;
+        const rLower = Re + lowerKm * 1000;
+        const densityKgM3 = densityGcm3 * 1000;
+        return Math.cbrt(
+            densityKgM3 / rho_cr * (rUpper ** 3 - rLower ** 3) + rLower ** 3
+        ) - rLower;
+    }
+
+    const h_eq = waterTop.map((_, index) => {
+        const deltaHWater = partialEquivalentHeight(
+            waterTop[index],
+            waterBottom[index],
+            waterDensity[index]
+        );
+        const deltaHIce = partialEquivalentHeight(
+            iceTop[index],
+            iceBottom[index],
+            iceDensity[index]
+        );
+
+        // h_eq = ice-bottom height + water contribution + ice contribution.
+        return (iceBottom[index] * 1000 + deltaHWater + deltaHIce) / 1000;
+    });
+
+    return h_eq;
+}
+/* ================= END WATER + ICE h_eq CALCULATION ===================== */
+
 function formatSectionCoordinate(direction, coordinate) {
     if (coordinate === 0) {
         return "0°";
@@ -917,6 +1018,7 @@ function formatSectionCoordinate(direction, coordinate) {
     return `${magnitude}° ${suffix}`;
 }
 
+// Cross-section grid overlay.
 function crossSectionHorizontalGridStep(span) {
     if (span >= 80) return 20;
     if (span >= 40) return 10;
@@ -961,10 +1063,12 @@ function buildCrossSectionGridShapes(xRange, yRange) {
     return shapes;
 }
 
+// Cross-section loading, trace assembly, and Plotly rendering.
 async function plotCrossSection() {
     const direction = document.getElementById("cross-direction").value;
     const property = document.getElementById("cross-property").value;
     const excludeSediments = document.getElementById("exclude-sediments").checked;
+    const plotAiryMoho = document.getElementById("plot-airy-moho").checked;
     const metadata = PROPERTY_METADATA[property];
     const button = document.getElementById("plot-cross-section");
     const status = document.getElementById("cross-section-status");
@@ -981,7 +1085,7 @@ async function plotCrossSection() {
             document.getElementById("cross-coordinate").value
         );
         const horizontalRange = getCrossSectionRange(direction);
-        const grids = await loadCrossSectionGrids(property);
+        const grids = await loadCrossSectionGrids(property, plotAiryMoho);
         setStatus(status, "Interpolating layers and preparing the cross-section…");
 
         const x = sectionXAxis(direction);
@@ -999,6 +1103,26 @@ async function plotCrossSection() {
             excludeSediments
         );
         const traces = [heatmap.trace];
+        let airyMoho = null;
+
+        if (plotAiryMoho) {
+            const airyDensitySections = grids.airyDensities.map(grid =>
+                extractSection(grid, direction, coordinate, true)
+            );
+            const h_eq = computeWaterIceEquivalentTopography(
+                boundaries,
+                airyDensitySections
+            );
+            airyMoho = h_eq.map(equivalentHeight =>
+                Airy_iso_surf(
+                    equivalentHeight * 1000,
+                    Re,
+                    D,
+                    rho_cr,
+                    rho_m
+                ) / 1000
+            );
+        }
 
         traces.push(
             makeLayerFillTrace(
@@ -1042,11 +1166,34 @@ async function plotCrossSection() {
             });
         });
 
+        if (airyMoho) {
+            traces.push({
+                type: "scatter",
+                mode: "lines",
+                x,
+                y: airyMoho,
+                name: `Airy Moho (D = ${(D / 1000).toFixed(2)} km)`,
+                line: {
+                    color: "#0066cc",
+                    width: 2.2,
+                    dash: "dash",
+                    shape: "hvh"
+                },
+                hovertemplate:
+                    "<b>Airy Moho</b><br>" +
+                    "%{x:.1f}°<br>Elevation: %{y:.2f} km<extra></extra>"
+            });
+        }
+
         const directionLabel = direction === "parallel" ? "parallel" : "meridian";
         const axisTitle = direction === "parallel" ? "Longitude (°)" : "Latitude (°)";
         const coordinateLabel = formatSectionCoordinate(direction, coordinate);
         const plotXRange = horizontalRange || [x[0], x[x.length - 1]];
-        const plotYRange = [heatmap.mantleBottom, heatmap.surfaceMaximum];
+        const airyMinimum = airyMoho ? Math.min(...airyMoho) : Infinity;
+        const plotYRange = [
+            Math.min(heatmap.mantleBottom, airyMinimum - (airyMoho ? 1 : 0)),
+            heatmap.surfaceMaximum
+        ];
         const layout = {
             autosize: true,
             title: {
@@ -1083,7 +1230,7 @@ async function plotCrossSection() {
             },
             shapes: buildCrossSectionGridShapes(plotXRange, plotYRange),
             uirevision:
-                `${direction}-${property}-${coordinate}-${excludeSediments}-` +
+                `${direction}-${property}-${coordinate}-${excludeSediments}-${plotAiryMoho}-` +
                 `${horizontalRange ? horizontalRange.join(":") : "full"}`
         };
 
@@ -1101,6 +1248,7 @@ async function plotCrossSection() {
             `Cross-section ready. Loaded 9 boundary grids and 9 ${metadata.label.toLowerCase()} grids; ` +
             `${excludeSediments ? "crystalline crust and mantle" : "rock"} color range ` +
             `${heatmap.minimum.toFixed(2)}–${heatmap.maximum.toFixed(2)} ${metadata.unit}.` +
+            `${plotAiryMoho ? ` Airy Moho uses fixed D = ${(D / 1000).toFixed(2)} km.` : ""}` +
             `${horizontalRange ? ` Displaying ${horizontalRange[0]}° to ${horizontalRange[1]}°.` : ""}`
         );
     } catch (error) {
@@ -1113,24 +1261,39 @@ async function plotCrossSection() {
     }
 }
 
-document.getElementById("ok").addEventListener("click", loadMap);
-document.getElementById("map-extent-clip").addEventListener("change", updateMapExtentControls);
-document.getElementById("layer").addEventListener("change", updateMapExtentControls);
-document.getElementById("property").addEventListener("change", updateMapExtentControls);
-document.getElementById("cross-direction").addEventListener("change", () => {
+/* ==========================================================================
+   Viewer initialization
+   ========================================================================== */
+
+function initializeMapViewer() {
+    document.getElementById("ok").addEventListener("click", loadMap);
+    document.getElementById("map-extent-clip").addEventListener(
+        "change",
+        updateMapExtentControls
+    );
+    document.getElementById("layer").addEventListener("change", updateMapExtentControls);
+    document.getElementById("property").addEventListener("change", updateMapExtentControls);
+    updateMapExtentControls();
+}
+
+function initializeCrossSectionViewer() {
+    document.getElementById("cross-direction").addEventListener("change", () => {
+        updateCoordinateControl();
+        updateCrossSectionRangeControls(true);
+    });
+    document.getElementById("clip-cross-range").addEventListener(
+        "change",
+        () => updateCrossSectionRangeControls(false)
+    );
+    document.getElementById("plot-cross-section").addEventListener("click", plotCrossSection);
+    document.getElementById("cross-coordinate").addEventListener("keydown", event => {
+        if (event.key === "Enter") {
+            plotCrossSection();
+        }
+    });
     updateCoordinateControl();
     updateCrossSectionRangeControls(true);
-});
-document.getElementById("clip-cross-range").addEventListener(
-    "change",
-    () => updateCrossSectionRangeControls(false)
-);
-document.getElementById("plot-cross-section").addEventListener("click", plotCrossSection);
-document.getElementById("cross-coordinate").addEventListener("keydown", event => {
-    if (event.key === "Enter") {
-        plotCrossSection();
-    }
-});
-updateMapExtentControls();
-updateCoordinateControl();
-updateCrossSectionRangeControls(true);
+}
+
+initializeMapViewer();
+initializeCrossSectionViewer();
